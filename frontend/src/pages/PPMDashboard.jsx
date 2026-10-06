@@ -1,325 +1,216 @@
 import { useMemo } from "react";
-
 import PlotlyChart from "../components/PlotlyChart";
-
 import {
   calculatePPM,
-  getPartSummary,
   getLocationSummary,
+  getPartSummary,
 } from "../data/dataEngine";
 
-
-function PPMDashboard({ data }) {
-
-  // ========================================================
-  // LOCATION PPM
-  // ========================================================
-
+function PPMDashboard({
+  data,
+}) {
   const locationSummary = useMemo(
     () => getLocationSummary(data),
     [data]
   );
 
+  const partSummary = useMemo(
+    () => getPartSummary(data),
+    [data]
+  );
 
-  // ========================================================
-  // TOP 10 PARTS BY PPM
-  // ========================================================
-
-  const topPartsByPPM = useMemo(() => {
-
-    return getPartSummary(data)
-      .filter(
-        (part) =>
-          part.saleQuantity > 0
-      )
-      .sort(
-        (a, b) => b.ppm - a.ppm
-      )
-      .slice(0, 10);
-
-  }, [data]);
-
-
-  // ========================================================
-  // MONTHLY PPM
-  // ========================================================
+  /* =====================================================
+     MONTHLY PPM
+  ===================================================== */
 
   const monthlyPPM = useMemo(() => {
-
     const grouped = {};
 
     data.forEach((row) => {
-
-      if (!row.month_start) {
-        return;
-      }
+      if (!row.date) return;
 
       const month =
-        row.month_start
-          .toISOString()
-          .slice(0, 7);
+        row.date.slice(0, 7);
 
       if (!grouped[month]) {
         grouped[month] = {
-          rejection: 0,
-          sale: 0,
+          month,
+          rejectionQuantity: 0,
+          saleQuantity: 0,
         };
       }
 
-      grouped[month].rejection +=
+      grouped[month]
+        .rejectionQuantity +=
         row.rejectionQuantity;
 
-      grouped[month].sale +=
+      grouped[month]
+        .saleQuantity +=
         row.saleQuantity;
     });
 
+    return Object.values(grouped)
+      .map((row) => ({
+        ...row,
 
-    return Object.entries(grouped)
-      .sort(([a], [b]) =>
-        a.localeCompare(b)
-      )
-      .map(
-        ([month, values]) => ({
-          month,
-          ppm: calculatePPM(
-            values.rejection,
-            values.sale
-          ),
-        })
+        ppm: calculatePPM(
+          row.rejectionQuantity,
+          row.saleQuantity
+        ),
+      }))
+      .sort((a, b) =>
+        a.month.localeCompare(
+          b.month
+        )
       );
-
   }, [data]);
 
+  /* =====================================================
+     LOCATION PPM CHART
+  ===================================================== */
 
-  // ========================================================
-  // LOCATION CHART
-  // ========================================================
+  const locationPPMChart = {
+    x: locationSummary.map(
+      (row) => row.location
+    ),
 
-  const locationChart = [
-    {
-      x: locationSummary.map(
-        (item) => item.location
-      ),
+    y: locationSummary.map(
+      (row) => row.ppm
+    ),
 
-      y: locationSummary.map(
-        (item) => item.ppm
-      ),
+    type: "bar",
 
-      type: "bar",
-
-      name: "PPM",
-
-      marker: {
-        color: "#5b8def",
-      },
-    },
-  ];
-
-
-  // ========================================================
-  // MONTHLY TREND CHART
-  // ========================================================
-
-  const trendChart = [
-    {
-      x: monthlyPPM.map(
-        (item) => item.month
-      ),
-
-      y: monthlyPPM.map(
-        (item) => item.ppm
-      ),
-
-      type: "scatter",
-
-      mode: "lines+markers",
-
-      name: "PPM",
-
-      line: {
-        color: "#8b7cf6",
-        width: 3,
-      },
-
-      marker: {
-        size: 7,
-      },
-    },
-  ];
-
-
-  // ========================================================
-  // COMMON LAYOUT
-  // ========================================================
-
-  const commonLayout = {
-
-    paper_bgcolor: "transparent",
-
-    plot_bgcolor: "transparent",
-
-    font: {
-      color: "#cbd2dc",
-    },
-
-    margin: {
-      l: 60,
-      r: 25,
-      t: 35,
-      b: 65,
-    },
-
-    xaxis: {
-      gridcolor: "#242c36",
-      zerolinecolor: "#303844",
-      color: "#8f99a8",
-    },
-
-    yaxis: {
-      gridcolor: "#242c36",
-      zerolinecolor: "#303844",
-      color: "#8f99a8",
-    },
+    hovertemplate:
+      "Location: %{x}<br>" +
+      "PPM: %{y:,.0f}<extra></extra>",
   };
 
+  /* =====================================================
+     PPM TREND CHART
+  ===================================================== */
+
+  const ppmTrendChart = {
+    x: monthlyPPM.map(
+      (row) => row.month
+    ),
+
+    y: monthlyPPM.map(
+      (row) => row.ppm
+    ),
+
+    type: "scatter",
+    mode: "lines+markers",
+
+    line: {
+      width: 2,
+    },
+
+    marker: {
+      size: 7,
+    },
+
+    hovertemplate:
+      "Month: %{x}<br>" +
+      "PPM: %{y:,.0f}<extra></extra>",
+  };
+
+  /* =====================================================
+     TOP 10 PARTS BY PPM
+  ===================================================== */
+
+  const topPartsByPPM = [
+    ...partSummary,
+  ]
+    .filter(
+      (row) =>
+        row.saleQuantity > 0 &&
+        row.rejectionQuantity > 0
+    )
+    .sort(
+      (a, b) =>
+        b.ppm - a.ppm
+    )
+    .slice(0, 10);
 
   return (
-    <div className="analysis-page">
-
-      {/* ==================================================
-          HEADER
-      ================================================== */}
-
-      <div className="page-header">
-
+    <>
+      <div className="page-head">
         <div>
-
-          <div className="page-eyebrow">
-            CUSTOMER COMPLAINTS
-          </div>
-
-          <h2>
+          <div className="page-title">
             PPM Dashboard
-          </h2>
-
-          <p>
-            Parts-per-million quality performance
-            across locations and time.
-          </p>
-
-        </div>
-
-      </div>
-
-
-      {/* ==================================================
-          TOP CHARTS
-      ================================================== */}
-
-      <div className="chart-grid">
-
-        {/* -----------------------------------------------
-            LOCATION BY PPM
-        ----------------------------------------------- */}
-
-        <div className="chart-card">
-
-          <div className="chart-card-header">
-
-            <div>
-
-              <h3>
-                Location by PPM
-              </h3>
-
-              <p>
-                PPM comparison across locations
-              </p>
-
-            </div>
-
           </div>
 
+          <div className="page-sub">
+            Parts Per Million performance ·
+            PPM = (Rejection Qty × 1,000,000)
+            / Sale Qty
+          </div>
+        </div>
+      </div>
+
+      {/* =================================================
+          TOP ROW
+      ================================================= */}
+
+      <div className="two-col">
+
+        <div className="plot-card">
+
           <PlotlyChart
-            data={locationChart}
+            data={[
+              locationPPMChart,
+            ]}
             layout={{
-              ...commonLayout,
+              title: {
+                text:
+                  "PPM by Location",
+                font: {
+                  size: 13,
+                },
+              },
 
               xaxis: {
-                ...commonLayout.xaxis,
-
-                title: {
-                  text: "Location",
-                },
+                title: "Location",
               },
 
               yaxis: {
-                ...commonLayout.yaxis,
-
-                title: {
-                  text: "PPM",
-                },
-
-                rangemode: "tozero",
+                title: "PPM",
+                rangemode:
+                  "tozero",
               },
-            }}
 
-            style={{
-              height: "360px",
+              height: 350,
             }}
           />
 
         </div>
 
-
-        {/* -----------------------------------------------
-            PPM TREND
-        ----------------------------------------------- */}
-
-        <div className="chart-card">
-
-          <div className="chart-card-header">
-
-            <div>
-
-              <h3>
-                PPM Trend
-              </h3>
-
-              <p>
-                Monthly customer complaint PPM
-              </p>
-
-            </div>
-
-          </div>
+        <div className="plot-card">
 
           <PlotlyChart
-            data={trendChart}
+            data={[
+              ppmTrendChart,
+            ]}
             layout={{
-              ...commonLayout,
+              title: {
+                text:
+                  "PPM Trend",
+                font: {
+                  size: 13,
+                },
+              },
 
               xaxis: {
-                ...commonLayout.xaxis,
-
-                title: {
-                  text: "Month",
-                },
+                title: "Month",
               },
 
               yaxis: {
-                ...commonLayout.yaxis,
-
-                title: {
-                  text: "PPM",
-                },
-
-                rangemode: "tozero",
+                title: "PPM",
+                rangemode:
+                  "tozero",
               },
-            }}
 
-            style={{
-              height: "360px",
+              height: 350,
             }}
           />
 
@@ -327,123 +218,82 @@ function PPMDashboard({ data }) {
 
       </div>
 
-
-      {/* ==================================================
+      {/* =================================================
           TOP 10 PARTS BY PPM
-      ================================================== */}
+      ================================================= */}
 
-      <div className="table-card">
+      <h2>
+        Top 10 Parts by PPM
+      </h2>
 
-        <div className="chart-card-header">
+      <div className="table-wrapper">
 
-          <div>
+        <table>
 
-            <h3>
-              Top 10 Parts by PPM
-            </h3>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Part No.</th>
+              <th>Part Description</th>
+              <th>Rejection Qty</th>
+              <th>Location</th>
+              <th>PPM</th>
+            </tr>
+          </thead>
 
-            <p>
-              Parts with the highest calculated
-              customer complaint PPM.
-            </p>
+          <tbody>
 
-          </div>
+            {topPartsByPPM.map(
+              (part, index) => (
+                <tr
+                  key={`${part.partNo}-${index}`}
+                >
+                  <td>
+                    {index + 1}
+                  </td>
 
-        </div>
+                  <td>
+                    {part.partNo}
+                  </td>
 
+                  <td>
+                    {part.partName || "—"}
+                  </td>
 
-        <div className="table-wrapper">
+                  <td>
+                    {part.rejectionQuantity.toLocaleString()}
+                  </td>
 
-          <table className="dashboard-table">
+                  <td>
+                    {part.location || "—"}
+                  </td>
 
-            <thead>
+                  <td>
+                    {part.ppm.toLocaleString(
+                      undefined,
+                      {
+                        maximumFractionDigits: 0,
+                      }
+                    )}
+                  </td>
+                </tr>
+              )
+            )}
 
-              <tr>
+          </tbody>
 
-                <th>
-                  Rank
-                </th>
-
-                <th>
-                  Part No.
-                </th>
-
-                <th>
-                  Part Description
-                </th>
-
-                <th>
-                  Rejection Qty
-                </th>
-
-                <th>
-                  Location
-                </th>
-
-                <th>
-                  PPM
-                </th>
-
-              </tr>
-
-            </thead>
-
-
-            <tbody>
-
-              {topPartsByPPM.map(
-                (part, index) => (
-
-                  <tr
-                    key={part.partNo}
-                  >
-
-                    <td>
-                      {index + 1}
-                    </td>
-
-                    <td>
-                      {part.partNo}
-                    </td>
-
-                    <td>
-                      {part.partName || "-"}
-                    </td>
-
-                    <td>
-                      {part.rejectionQuantity.toLocaleString()}
-                    </td>
-
-                    <td>
-                      {part.locations.join(", ") || "-"}
-                    </td>
-
-                    <td>
-                      {part.ppm.toLocaleString(
-                        undefined,
-                        {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        }
-                      )}
-                    </td>
-
-                  </tr>
-
-                )
-              )}
-
-            </tbody>
-
-          </table>
-
-        </div>
+        </table>
 
       </div>
 
-    </div>
+      {topPartsByPPM.length === 0 && (
+        <div className="warning">
+          No PPM records are available for
+          the current filters.
+        </div>
+      )}
+    </>
   );
 }
-
 
 export default PPMDashboard;
