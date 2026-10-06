@@ -2,18 +2,25 @@ import axios from "axios";
 
 const API_BASE_URL = "http://127.0.0.1:8000";
 
-export async function fetchCustomerComplaints() {
-  const response = await axios.get(
-    `${API_BASE_URL}/api/customer-complaints`
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+});
+
+export async function getCustomerComplaints() {
+  const response = await api.get(
+    "/api/customer-complaints"
   );
 
   return response.data;
 }
 
-export async function fetchCustomerComplaintsSummary() {
-  const response = await axios.get(
-    `${API_BASE_URL}/api/customer-complaints/summary`
+export async function getCustomerComplaintsSummary() {
+  const response = await api.get(
+    "/api/customer-complaints/summary"
   );
 
   return response.data;
 }
+
+export default api;

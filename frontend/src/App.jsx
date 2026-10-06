@@ -1,41 +1,180 @@
-import { useEffect, useState } from "react";
-import { fetchCustomerComplaints } from "./api/customerComplaints";
-import "./App.css";
+import { useEffect, useMemo, useState } from "react";
+
+import Sidebar from "./components/Sidebar";
+import Filters from "./components/Filters";
+import KPIStrip from "./components/KPIStrip";
+
+import Overview from "./pages/Overview";
+import PPMDashboard from "./pages/PPMDashboard";
+import LocationAnalysis from "./pages/LocationAnalysis";
+import PartAnalysis from "./pages/PartAnalysis";
+import DefectAnalysis from "./pages/DefectAnalysis";
+import ProcessAnalysis from "./pages/ProcessAnalysis";
+import MachineAnalysis from "./pages/MachineAnalysis";
+import CostAnalysis from "./pages/CostAnalysis";
+
+import { getCustomerComplaints } from "./api/customerComplaints";
+import {
+  normalizeCustomerComplaints,
+  filterData,
+} from "./data/dataEngine";
+
+function toInputDate(dateString) {
+  if (!dateString) return "";
+
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 
 function App() {
-  const [data, setData] = useState([]);
+  const [activePage, setActivePage] = useState("overview");
+
+  const [rawData, setRawData] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Top filters
+  const [selectedLocation, setSelectedLocation] =
+    useState("ALL");
+
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
+  // Sidebar filters
+  const [processFilter, setProcessFilter] = useState([]);
+  const [machineFilter, setMachineFilter] = useState([]);
+  const [partFilter, setPartFilter] = useState([]);
+  const [defectFilter, setDefectFilter] = useState([]);
+
+  // PPM sidebar filters
+  const [compareParts, setCompareParts] = useState([]);
+  const [ppmSingle, setPpmSingle] = useState("ALL");
+
   useEffect(() => {
+    async function loadData() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await getCustomerComplaints();
+
+        const normalized = normalizeCustomerComplaints(
+          response.data || []
+        );
+
+        setRawData(normalized);
+
+        if (normalized.length > 0) {
+          const dates = normalized
+            .map((row) => row.date)
+            .filter(Boolean)
+            .sort();
+
+          setStartDate(toInputDate(dates[0]));
+          setEndDate(
+            toInputDate(dates[dates.length - 1])
+          );
+        }
+      } catch (err) {
+        console.error(
+          "Failed to load Customer Complaints:",
+          err
+        );
+
+        setError(
+          "Unable to load Customer Complaints data from the backend."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
     loadData();
   }, []);
 
-  async function loadData() {
-    try {
-      setLoading(true);
-      setError("");
+  const filteredData = useMemo(() => {
+    return filterData(rawData, {
+      location: selectedLocation,
+      startDate,
+      endDate,
+      processFilter,
+      machineFilter,
+      partFilter,
+      defectFilter,
+    });
+  }, [
+    rawData,
+    selectedLocation,
+    startDate,
+    endDate,
+    processFilter,
+    machineFilter,
+    partFilter,
+    defectFilter,
+  ]);
 
-      const response = await fetchCustomerComplaints();
+  function renderPage() {
+    switch (activePage) {
+      case "overview":
+        return <Overview data={filteredData} />;
 
-      setData(response.data || []);
-    } catch (err) {
-      console.error("Failed to load customer complaints:", err);
+      case "ppm":
+        return (
+          <PPMDashboard
+            data={filteredData}
+            compareParts={compareParts}
+            ppmSingle={ppmSingle}
+          />
+        );
 
-      setError(
-        "Unable to connect to the InsightEdge backend."
-      );
-    } finally {
-      setLoading(false);
+      case "location":
+        return <LocationAnalysis data={filteredData} />;
+
+      case "part":
+        return <PartAnalysis data={filteredData} />;
+
+      case "defect":
+        return <DefectAnalysis data={filteredData} />;
+
+      case "process":
+        return <ProcessAnalysis data={filteredData} />;
+
+      case "machine":
+        return <MachineAnalysis data={filteredData} />;
+
+      case "cost":
+        return <CostAnalysis data={filteredData} />;
+
+      default:
+        return <Overview data={filteredData} />;
     }
   }
 
   if (loading) {
     return (
       <div className="app">
-        <div className="loading">
-          Loading Customer Complaints...
-        </div>
+        <main className="main">
+          <div className="welcome">
+            <div className="welcome-mark">◇</div>
+
+            <h1>
+              Loading InsightEdge...
+            </h1>
+
+            <p>
+              Connecting to the Customer Complaints
+              backend.
+            </p>
+          </div>
+        </main>
       </div>
     );
   }
@@ -43,120 +182,96 @@ function App() {
   if (error) {
     return (
       <div className="app">
-        <div className="error">
-          <h2>Backend Connection Error</h2>
-          <p>{error}</p>
-
-          <button onClick={loadData}>
-            Retry
-          </button>
-        </div>
+        <main className="main">
+          <div className="warning">
+            {error}
+          </div>
+        </main>
       </div>
     );
   }
 
   return (
     <div className="app">
-      <header className="header">
-        <div>
-          <h1>InsightEdge</h1>
-          <p>Quality Intelligence</p>
-        </div>
 
-        <div className="data-source">
-          Customer Complaints
-        </div>
-      </header>
+      <Sidebar
+        activePage={activePage}
+        setActivePage={setActivePage}
 
-      <main className="content">
+        data={rawData}
 
-        <section className="connection-card">
+        processFilter={processFilter}
+        setProcessFilter={setProcessFilter}
+
+        machineFilter={machineFilter}
+        setMachineFilter={setMachineFilter}
+
+        partFilter={partFilter}
+        setPartFilter={setPartFilter}
+
+        defectFilter={defectFilter}
+        setDefectFilter={setDefectFilter}
+
+        compareParts={compareParts}
+        setCompareParts={setCompareParts}
+
+        ppmSingle={ppmSingle}
+        setPpmSingle={setPpmSingle}
+      />
+
+      <main className="main">
+
+        <div className="page-head">
 
           <div>
-            <span className="status-dot"></span>
-            Backend Connected
-          </div>
-
-          <div>
-            Records: <strong>{data.length}</strong>
-          </div>
-
-        </section>
-
-        <section className="data-card">
-
-          <div className="section-header">
-            <div>
-              <h2>Customer Complaint Data</h2>
-              <p>
-                Data loaded directly from the FastAPI backend.
-              </p>
+            <div className="page-title">
+              InsightEdge Quality Intelligence
             </div>
 
-            <button onClick={loadData}>
-              Refresh
-            </button>
+            <div className="page-sub">
+              Real-time quality, rejection and PPM
+              performance
+            </div>
           </div>
 
-          <div className="table-container">
-
-            <table>
-
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Part No.</th>
-                  <th>Part Name</th>
-                  <th>Defect</th>
-                  <th>Rejection Qty</th>
-                  <th>Sale Qty</th>
-                  <th>Location</th>
-                </tr>
-              </thead>
-
-              <tbody>
-
-                {data.map((row, index) => (
-                  <tr key={index}>
-
-                    <td>
-                      {row.date}
-                    </td>
-
-                    <td>
-                      {row.part_no_clean}
-                    </td>
-
-                    <td>
-                      {row.part_name_clean}
-                    </td>
-
-                    <td>
-                      {row.defect}
-                    </td>
-
-                    <td>
-                      {row["rejection quantity"]}
-                    </td>
-
-                    <td>
-                      {row["sale quantity"]}
-                    </td>
-
-                    <td>
-                      {row.location}
-                    </td>
-
-                  </tr>
-                ))}
-
-              </tbody>
-
-            </table>
-
+          <div className="page-sub">
+            Executive Quality Dashboard
           </div>
 
-        </section>
+        </div>
+
+        <Filters
+          data={rawData}
+
+          selectedLocation={selectedLocation}
+          setSelectedLocation={
+            setSelectedLocation
+          }
+
+          startDate={startDate}
+          setStartDate={setStartDate}
+
+          endDate={endDate}
+          setEndDate={setEndDate}
+        />
+
+        {filteredData.length === 0 ? (
+          <div className="warning">
+            No rows match the current filters.
+            Expand the date range or clear one or
+            more sidebar filters.
+          </div>
+        ) : (
+          <>
+            {activePage !== "ppm" && (
+              <KPIStrip
+                data={filteredData}
+              />
+            )}
+
+            {renderPage()}
+          </>
+        )}
 
       </main>
     </div>
