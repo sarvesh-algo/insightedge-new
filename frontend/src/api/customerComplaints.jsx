@@ -1,3 +1,4 @@
+
 import axios from "axios";
 
 const API_BASE_URL = "http://127.0.0.1:8000";
@@ -8,17 +9,27 @@ const api = axios.create({
 });
 
 export async function getCustomerComplaints() {
-  const response = await api.get(
-    "/api/customer-complaints"
-  );
-
+  const response = await api.get("/api/customer-complaints");
   return response.data;
 }
 
 export async function getCustomerComplaintsSummary() {
-  const response = await api.get(
-    "/api/customer-complaints/summary"
-  );
+  const response = await api.get("/api/customer-complaints/summary");
+  return response.data;
+}
+
+export async function getDatasetPreview(source) {
+  const response = await api.get(`/api/datasets/${source}/preview`);
+  return response.data;
+}
+
+export async function uploadDatasetFile({ source, location, file }) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await api.post("/api/upload", formData, {
+    params: { source, location },
+  });
 
   return response.data;
 }
