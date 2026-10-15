@@ -1,0 +1,384 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
+from pathlib import Path
+from typing import Literal
+
+from fastapi import UploadFile, File, HTTPException
+
+from app.services.customer_complaints import load_customer_complaints
+
+from app.services.dataset_manager import (
+    load_combined_dataset,
+)
+
+import math
+from datetime import date, datetime
+
+from fastapi import HTTPException
+
+from app.services.dataset_manager import (
+    load_combined_dataset,
+    get_dataset_status,
+)
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+DATA_DIR = BASE_DIR / "data"
+
+UPLOAD_DIRECTORIES = {
+    "customer_complaints": {
+        "pune": DATA_DIR / "customer_complaints" / "pune",
+        "lkn": DATA_DIR / "customer_complaints" / "lkn",
+        "jsr": DATA_DIR / "customer_complaints" / "jsr",
+    },
+    "internal_rejections": {
+        "pune": DATA_DIR / "internal_rejections" / "pune",
+        "lkn": DATA_DIR / "internal_rejections" / "lkn",
+        "jsr": DATA_DIR / "internal_rejections" / "jsr",
+    },
+}
+
+
+
+
+app = FastAPI(
+    title="InsightEdge Quality Intelligence API",
+    version="1.0.0",
+)
+
+
+# ---------------------------------------------------------
+# CORS
+# ---------------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------
+# ROOT
+# ---------------------------------------------------------
+
+@app.get("/")
+def root():
+    return {
+        "message": "InsightEdge backend is running"
+    }
+
+
+
+
+from pathlib import Path
+
+# BASE_DIR should point to the backend directory.
+# If it is already defined in main.py, reuse that definition.
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
+
+def save_location_master(source: str, location: str, upload_file):
+    """
+    Save one active master file per source and location.
+
+    Re-uploading a location replaces its previous master file, so
+    old and new versions are not accidentally combined together.
+    """
+    if source not in {"customer_complaints", "internal_rejections"}:
+        raise ValueError("Unsupported source.")
+
+    if location not in {"pune", "lkn", "jsr"}:
+        raise ValueError("Unsupported location.")
+
+    original_name = Path(upload_file.filename or "").name
+
+    if not original_name:
+        raise ValueError("Please select a file.")
+
+    extension = Path(original_name).suffix.lower()
+
+    if extension not in ALLOWED_EXTENSIONS:
+        raise ValueError("Upload a CSV, XLSX or XLS file.")
+
+    location_dir = DATA_DIR / source / location
+    location_dir.mkdir(parents=True, exist_ok=True)
+
+    # Read the incoming file before replacing the existing master.
+    file_bytes = upload_file.file.read()
+
+    if not file_bytes:
+        raise ValueError("The uploaded file is empty.")
+
+    # Keep the uploaded extension but use a stable filename.
+    target_path = location_dir / f"master{extension}"
+    temporary_path = location_dir / f".master_upload{extension}"
+
+    try:
+        temporary_path.write_bytes(file_bytes)
+
+        # Verify that the upload is readable before replacing the master.
+        if extension == ".csv":
+            pd.read_csv(temporary_path, nrows=5)
+        else:
+            pd.ExcelFile(temporary_path).close()
+
+        # Only after successful reading, replace the previous master.
+        for existing in location_dir.iterdir():
+            if (
+                existing.is_file()
+                and existing.suffix.lower() in ALLOWED_EXTENSIONS
+            ):
+                if existing != temporary_path:
+                    existing.unlink()
+
+        temporary_path.replace(target_path)
+
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+    return {
+        "source": source,
+        "location": location.upper(),
+        "filename": target_path.name,
+        "message": "Master file uploaded successfully.",
+    }
+
+
+
+
+@app.post("/api/upload")
+async def upload_dataset(
+    source: Literal["customer_complaints", "internal_rejections"],
+    location: Literal["pune", "lkn", "jsr"],
+    file: UploadFile = File(...),
+):
+    try:
+        result = save_location_master(source, location, file)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload failed: {exc}",
+        ) from exc
+    finally:
+        await file.close()
+    
+    
+
+
+@app.get("/api/datasets/status")
+def datasets_status():
+    """Counts and uploaded master files for both sources."""
+    return get_dataset_status()
+
+
+@app.get("/api/datasets/{source}/preview")
+def preview_dataset(source: str):
+    """Preview the combined dataset for a selected source."""
+    if source not in {"customer_complaints", "internal_rejections"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported dataset source.",
+        )
+
+    try:
+        combined = load_combined_dataset(source)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not combine dataset: {exc}",
+        ) from exc
+
+    preview = combined.head(20).copy()
+    preview = preview.astype(object)
+    preview = preview.where(pd.notna(preview), None)
+
+    def make_json_safe(value):
+        if value is None:
+            return None
+
+        if hasattr(value, "item"):
+            value = value.item()
+
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+
+        if isinstance(value, (pd.Timestamp, datetime, date)):
+            return value.isoformat()
+
+        return value
+
+    records = [
+        {
+            key: make_json_safe(value)
+            for key, value in row.items()
+        }
+        for row in preview.to_dict(orient="records")
+    ]
+
+    location_counts = {}
+    if not combined.empty and "Location" in combined.columns:
+        location_counts = {
+            str(location): int(count)
+            for location, count in (
+                combined["Location"].value_counts().items()
+            )
+        }
+
+    return {
+        "source": source,
+        "rows": len(combined),
+        "columns": combined.columns.tolist(),
+        "location_counts": location_counts,
+        "data": records,
+    }
+
+
+    
+    
+    
+# ---------------------------------------------------------
+# CUSTOMER COMPLAINTS - HEALTH / TEST
+# ---------------------------------------------------------
+
+@app.get("/api/customer-complaints/test")
+def customer_complaints_test():
+
+    df = load_customer_complaints()
+
+    location_summary = (
+        df.groupby("location")
+        .agg(
+            records=("location", "size"),
+            rejection_quantity=("rejection quantity", "sum"),
+            sale_quantity=("sale quantity", "sum"),
+        )
+        .reset_index()
+    )
+
+    return {
+        "data_source": "customer_complaints",
+
+        "rows": len(df),
+
+        "columns": list(df.columns),
+
+        "locations": sorted(
+            df["location"]
+            .dropna()
+            .unique()
+            .tolist()
+        ),
+
+        "date_min": (
+            df["date"].min().strftime("%Y-%m-%d")
+            if not df.empty
+            else None
+        ),
+
+        "date_max": (
+            df["date"].max().strftime("%Y-%m-%d")
+            if not df.empty
+            else None
+        ),
+
+        "total_rejection_quantity": round(
+            float(df["rejection quantity"].sum()),
+            2
+        ),
+
+        "total_sale_quantity": round(
+            float(df["sale quantity"].sum()),
+            2
+        ),
+
+        "location_summary": (
+            location_summary
+            .round(2)
+            .to_dict(orient="records")
+        ),
+    }
+
+
+# ---------------------------------------------------------
+# CUSTOMER COMPLAINTS - COMPLETE DATA
+# ---------------------------------------------------------
+
+@app.get("/api/customer-complaints")
+def customer_complaints():
+
+    df = load_customer_complaints()
+
+    # Convert dates to JSON-safe strings
+    df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+    df["month_start"] = df["month_start"].dt.strftime("%Y-%m-%d")
+
+    # Replace NaN / NaT
+    df = df.fillna("")
+
+    records = df.to_dict(orient="records")
+
+    return {
+        "data_source": "customer_complaints",
+        "rows": len(records),
+        "data": records,
+    }
+
+
+# ---------------------------------------------------------
+# CUSTOMER COMPLAINTS - SUMMARY
+# ---------------------------------------------------------
+
+@app.get("/api/customer-complaints/summary")
+def customer_complaints_summary():
+
+    df = load_customer_complaints()
+
+    location_summary = (
+        df.groupby("location")
+        .agg(
+            records=("location", "size"),
+            rejection_quantity=("rejection quantity", "sum"),
+            sale_quantity=("sale quantity", "sum"),
+        )
+        .reset_index()
+    )
+
+    return {
+        "data_source": "customer_complaints",
+
+        "total_records": len(df),
+
+        "locations": sorted(
+            df["location"]
+            .dropna()
+            .unique()
+            .tolist()
+        ),
+
+        "total_rejection_quantity": round(
+            float(df["rejection quantity"].sum()),
+            2
+        ),
+
+        "total_sale_quantity": round(
+            float(df["sale quantity"].sum()),
+            2
+        ),
+
+        "location_summary": (
+            location_summary
+            .round(2)
+            .to_dict(orient="records")
+        ),
+    }

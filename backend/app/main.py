@@ -3,13 +3,25 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from pathlib import Path
 from typing import Literal
-
+from app.services.dataset_manager import _is_valid_sheet
 from fastapi import UploadFile, File, HTTPException
 
-from app.services.customer_complaints import load_customer_complaints
+from app.services.customer_complaints import (
+    load_customer_complaints,
+    is_customer_complaint_sheet,
+)
+from app.services.dataset_manager import (
+    load_combined_dataset,
+)
+
+import math
+from datetime import date, datetime
+
+from fastapi import HTTPException
 
 from app.services.dataset_manager import (
     load_combined_dataset,
+    get_dataset_status,
 )
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -65,124 +77,259 @@ def root():
 
 
 
+
+from pathlib import Path
+
+# BASE_DIR should point to the backend directory.
+# If it is already defined in main.py, reuse that definition.
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
+
+
+def save_location_master(source: str, location: str, upload_file):
+    """
+    Append monthly data to a persistent master.xlsx for one source/location.
+
+    Customer complaints:
+      - Preserve existing worksheets.
+      - Append rows to a matching worksheet, or add a new valid worksheet.
+
+    Internal rejections:
+      - Append valid monthly rows into Sheet1, which is what the
+        existing internal-rejections loader reads.
+
+    The existing master is replaced only after the merged workbook
+    has been written and verified successfully.
+    """
+    import os
+
+    if source not in {"customer_complaints", "internal_rejections"}:
+        raise ValueError("Unsupported source.")
+
+    if location not in {"pune", "lkn", "jsr"}:
+        raise ValueError("Unsupported location.")
+
+    original_name = Path(upload_file.filename or "").name
+    if not original_name:
+        raise ValueError("Please select a file.")
+
+    extension = Path(original_name).suffix.lower()
+    if extension not in {".xlsx", ".xls", ".csv"}:
+        raise ValueError("Upload a CSV, XLSX or XLS file.")
+
+    location_dir = DATA_DIR / source / location
+    location_dir.mkdir(parents=True, exist_ok=True)
+
+    # Always maintain one canonical Excel master per location.
+    master_path = location_dir / "master.xlsx"
+    incoming_path = location_dir / f".incoming_upload{extension}"
+    output_path = location_dir / ".master_build.xlsx"
+
+    file_bytes = upload_file.file.read()
+    if not file_bytes:
+        raise ValueError("The uploaded file is empty.")
+
+    def is_valid(frame):
+        if frame is None or frame.empty:
+            return False
+
+        if source == "customer_complaints":
+            return is_customer_complaint_sheet(frame)
+
+        return _is_valid_sheet(frame, source)
+
+    try:
+        incoming_path.write_bytes(file_bytes)
+
+        # Read the uploaded monthly workbook.
+        if extension == ".csv":
+            incoming_sheets = {
+                "Sheet1" if source == "internal_rejections" else "UploadedData":
+                    pd.read_csv(incoming_path)
+            }
+        else:
+            with pd.ExcelFile(incoming_path) as workbook:
+                incoming_sheets = {
+                    sheet_name: pd.read_excel(
+                        workbook,
+                        sheet_name=sheet_name,
+                    )
+                    for sheet_name in workbook.sheet_names
+                }
+
+        valid_incoming = {
+            name: frame.dropna(how="all").copy()
+            for name, frame in incoming_sheets.items()
+            if is_valid(frame.dropna(how="all").copy())
+        }
+
+        if not valid_incoming:
+            raise ValueError(
+                f"No valid {source.replace('_', ' ')} data worksheet "
+                "was found. The existing master was not changed."
+            )
+
+        # Load the existing master without modifying it.
+        existing_sheets = {}
+
+        if master_path.exists():
+            with pd.ExcelFile(master_path) as workbook:
+                existing_sheets = {
+                    name: pd.read_excel(
+                        workbook,
+                        sheet_name=name,
+                    )
+                    for name in workbook.sheet_names
+                }
+
+        if source == "internal_rejections":
+            # The existing internal loader reads Sheet1 specifically.
+            existing_key = next(
+                (
+                    name for name in existing_sheets
+                    if name.lower() == "sheet1"
+                ),
+                None,
+            )
+
+            old_data = (
+                existing_sheets.pop(existing_key)
+                if existing_key is not None
+                else pd.DataFrame()
+            )
+
+            new_data = pd.concat(
+                list(valid_incoming.values()),
+                ignore_index=True,
+                sort=False,
+            )
+
+            existing_sheets["Sheet1"] = pd.concat(
+                [old_data, new_data],
+                ignore_index=True,
+                sort=False,
+            )
+
+        else:
+            # Keep all existing sheets, including lookup/reference sheets.
+            for sheet_name, new_data in valid_incoming.items():
+                target_sheet = sheet_name[:31] or "Data"
+
+                if target_sheet in existing_sheets:
+                    existing_sheets[target_sheet] = pd.concat(
+                        [
+                            existing_sheets[target_sheet],
+                            new_data,
+                        ],
+                        ignore_index=True,
+                        sort=False,
+                    )
+                else:
+                    existing_sheets[target_sheet] = new_data
+
+        # Build a separate workbook first. Do not overwrite master yet.
+        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            for sheet_name, frame in existing_sheets.items():
+                safe_sheet_name = sheet_name[:31] or "Data"
+                frame.to_excel(
+                    writer,
+                    sheet_name=safe_sheet_name,
+                    index=False,
+                )
+
+        # Verify the generated workbook before committing it.
+        with pd.ExcelFile(output_path) as workbook:
+            verified = False
+
+            for sheet_name in workbook.sheet_names:
+                check = pd.read_excel(
+                    workbook,
+                    sheet_name=sheet_name,
+                )
+
+                if is_valid(check):
+                    verified = True
+                    break
+
+            if not verified:
+                raise ValueError(
+                    "The merged master failed validation. "
+                    "The existing master was not changed."
+                )
+
+        # Atomic replacement after successful verification.
+        os.replace(output_path, master_path)
+
+        appended_rows = sum(len(frame) for frame in valid_incoming.values())
+
+        return {
+            "source": source,
+            "location": location.upper(),
+            "filename": master_path.name,
+            "appended_rows": int(appended_rows),
+            "message": (
+                f"Monthly data appended successfully to "
+                f"{location.upper()} master."
+            ),
+        }
+
+    finally:
+        incoming_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+
+
+
 @app.post("/api/upload")
-async def upload_dataset_file(
-    source: Literal[
-        "customer_complaints",
-        "internal_rejections",
-    ],
-    location: Literal[
-        "pune",
-        "lkn",
-        "jsr",
-    ],
+async def upload_dataset(
+    source: Literal["customer_complaints", "internal_rejections"],
+    location: Literal["pune", "lkn", "jsr"],
     file: UploadFile = File(...),
 ):
-    """
-    Upload one location-specific Excel file.
-
-    Example:
-    source=customer_complaints
-    location=pune
-    """
-
-    allowed_extensions = {
-        ".xlsx",
-        ".xls",
-        ".csv",
-    }
-
-    original_name = file.filename or ""
-
-    extension = Path(
-        original_name
-    ).suffix.lower()
-
-    if extension not in allowed_extensions:
+    try:
+        result = save_location_master(source, location, file)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Unsupported file type. "
-                "Upload .xlsx, .xls or .csv files."
-            ),
-        )
-
-    destination_dir = (
-        UPLOAD_DIRECTORIES[source][location]
-    )
-
-    destination_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    # Prevent path traversal.
-    safe_name = Path(
-        original_name
-    ).name
-
-    if not safe_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid filename.",
-        )
-
-    destination = (
-        destination_dir / safe_name
-    )
-
-    file_content = await file.read()
-
-    if not file_content:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file is empty.",
-        )
-
-    destination.write_bytes(
-        file_content
-    )
-
-    return {
-        "success": True,
-        "source": source,
-        "location": location,
-        "filename": safe_name,
-        "path": str(
-            destination.relative_to(
-                BASE_DIR
-            )
-        ),
-        "size_bytes": len(file_content),
-        "message": (
-            f"{location.upper()} "
-            f"{source.replace('_', ' ').title()} "
-            "file uploaded successfully."
-        ),
-    }
+            detail=f"Upload failed: {exc}",
+        ) from exc
+    finally:
+        await file.close()
     
     
+
+
+@app.get("/api/datasets/status")
+def datasets_status():
+    """Counts and uploaded master files for both sources."""
+    return get_dataset_status()
+
+
 @app.get("/api/datasets/{source}/preview")
 def preview_dataset(source: str):
+    """Preview the combined dataset for a selected source."""
     if source not in {"customer_complaints", "internal_rejections"}:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported dataset source."
+            detail="Unsupported dataset source.",
         )
 
-    data = load_combined_dataset(source)
+    try:
+        combined = load_combined_dataset(source)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not combine dataset: {exc}",
+        ) from exc
 
-    # Convert NaN and Infinity to None for valid JSON
-    preview = data.head(20).copy()
+    preview = combined.head(20).copy()
     preview = preview.astype(object)
     preview = preview.where(pd.notna(preview), None)
-    preview = preview.replace([float("inf"), float("-inf")], None)
-
-    # Convert pandas/numpy values to JSON-safe Python values
-    records = preview.to_dict(orient="records")
-
-    import math
-    from datetime import date, datetime
 
     def make_json_safe(value):
         if value is None:
@@ -200,21 +347,31 @@ def preview_dataset(source: str):
         return value
 
     records = [
-        {key: make_json_safe(value) for key, value in row.items()}
-        for row in records
+        {
+            key: make_json_safe(value)
+            for key, value in row.items()
+        }
+        for row in preview.to_dict(orient="records")
     ]
+
+    location_counts = {}
+    if not combined.empty and "Location" in combined.columns:
+        location_counts = {
+            str(location): int(count)
+            for location, count in (
+                combined["Location"].value_counts().items()
+            )
+        }
 
     return {
         "source": source,
-        "rows": len(data),
-        "columns": data.columns.tolist(),
-        "locations": (
-            sorted(data["Location"].dropna().unique().tolist())
-            if "Location" in data.columns
-            else []
-        ),
+        "rows": len(combined),
+        "columns": combined.columns.tolist(),
+        "location_counts": location_counts,
         "data": records,
     }
+
+
     
     
     
