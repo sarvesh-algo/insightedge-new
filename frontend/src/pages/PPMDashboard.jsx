@@ -202,12 +202,15 @@ function PPMDashboard({
 
               xaxis: {
                 title: "Month",
+                showgrid: false,
+                zeroline: false,
               },
 
               yaxis: {
                 title: "PPM",
-                rangemode:
-                  "tozero",
+                rangemode: "tozero",
+                showgrid: false,
+                zeroline: false,
               },
 
               height: 350,

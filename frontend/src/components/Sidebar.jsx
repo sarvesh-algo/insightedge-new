@@ -60,11 +60,12 @@ function FilterMulti({
 
   return (
     <div
-      className="filter-block"
+      className={`filter-block ${open ? "filter-open" : ""}`}
       ref={ref}
     >
       <label>{label}</label>
 
+      <div className="filter-dropdown-anchor">
       <button
         type="button"
         className="multi-select"
@@ -161,6 +162,7 @@ function FilterMulti({
           </div>
         </div>
       )}
+      </div>
 
       {selected.length > 0 && (
         <div className="selected-preview">

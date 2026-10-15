@@ -1,8 +1,5 @@
 import PlotlyChart from "../components/PlotlyChart";
-import {
-  getPartSummary,
-  calculatePPM,
-} from "../data/dataEngine";
+import { getPartSummary } from "../data/dataEngine";
 
 function formatMonth(dateValue) {
   const date = new Date(`${dateValue}T00:00:00`);
@@ -111,22 +108,20 @@ function PartAnalysis({ data }) {
 
   const chartData = [
     {
-      x: top15.map((item) => item.partNo),
-      y: top15.map(
-        (item) =>
-          Number(item.rejectionQuantity || 0)
+      x: top15.map((item) =>
+        Number(item.rejectionQuantity || 0)
       ),
+      y: top15.map((item) => String(item.partNo || "Unknown")),
       type: "bar",
-      text: top15.map(
-        (item) =>
-          Number(
-            item.rejectionQuantity || 0
-          ).toLocaleString()
+      orientation: "h",
+      text: top15.map((item) =>
+        Number(item.rejectionQuantity || 0).toLocaleString()
       ),
       textposition: "outside",
+      cliponaxis: false,
       hovertemplate:
-        "<b>%{x}</b><br>" +
-        "Rejection Qty: %{y:,}<extra></extra>",
+        "<b>%{y}</b><br>" +
+        "Rejection Qty: %{x:,}<extra></extra>",
     },
   ];
 
@@ -139,19 +134,21 @@ function PartAnalysis({ data }) {
       },
     },
     xaxis: {
-      title: "Part No.",
-      tickangle: -45,
+      title: "Rejection Quantity",
+      rangemode: "tozero",
       automargin: true,
     },
     yaxis: {
-      title: "Rejection Quantity",
+      title: "Part No.",
       automargin: true,
+      autorange: "reversed",
     },
+    height: Math.max(520, top15.length * 32 + 125),
     margin: {
-      l: 70,
-      r: 30,
-      t: 65,
-      b: 120,
+      l: 145,
+      r: 75,
+      t: 70,
+      b: 55,
     },
   };
 

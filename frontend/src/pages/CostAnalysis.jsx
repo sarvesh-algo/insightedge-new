@@ -32,23 +32,22 @@ function CostAnalysis({ data }) {
 
   const chartData = [
     {
-      x: top15.map((item) => item.partNo),
-      y: top15.map(
-        (item) =>
-          Number(item.totalRejectionCost || 0)
+      x: top15.map((item) =>
+        Number(item.totalRejectionCost || 0)
       ),
+      y: top15.map((item) => String(item.partNo || "Unknown")),
       type: "bar",
+      orientation: "h",
       text: top15.map((item) =>
-        Number(
-          item.totalRejectionCost || 0
-        ).toLocaleString(undefined, {
+        Number(item.totalRejectionCost || 0).toLocaleString(undefined, {
           maximumFractionDigits: 2,
         })
       ),
       textposition: "outside",
+      cliponaxis: false,
       hovertemplate:
-        "<b>%{x}</b><br>" +
-        "Total Rejection Cost: %{y:,.2f}<extra></extra>",
+        "<b>%{y}</b><br>" +
+        "Total Rejection Cost: %{x:,.2f}<extra></extra>",
     },
   ];
 
@@ -61,19 +60,21 @@ function CostAnalysis({ data }) {
       },
     },
     xaxis: {
-      title: "Part No.",
-      tickangle: -45,
+      title: "Total Rejection Cost",
+      rangemode: "tozero",
       automargin: true,
     },
     yaxis: {
-      title: "Total Rejection Cost",
+      title: "Part No.",
       automargin: true,
+      autorange: "reversed",
     },
+    height: Math.max(520, top15.length * 32 + 125),
     margin: {
-      l: 80,
-      r: 30,
-      t: 65,
-      b: 120,
+      l: 145,
+      r: 90,
+      t: 70,
+      b: 55,
     },
   };
 

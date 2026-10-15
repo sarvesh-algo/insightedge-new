@@ -121,24 +121,28 @@ function Overview({ data }) {
      TOP 10 PARTS
   ===================================================== */
 
-  const topParts = partSummary
+  const topParts = [...partSummary]
+    .sort(
+      (a, b) =>
+        Number(b.rejectionQuantity || 0) -
+        Number(a.rejectionQuantity || 0)
+    )
     .slice(0, 10);
 
   const topPartsChart = {
-    x: topParts.map(
-      (row) =>
-        row.rejectionQuantity
+    x: topParts.map((row) =>
+      Number(row.rejectionQuantity || 0)
     ),
-
-    y: topParts.map(
-      (row) => row.partNo
-    ),
-
+    y: topParts.map((row) => String(row.partNo || "Unknown")),
     type: "bar",
     orientation: "h",
-
+    text: topParts.map((row) =>
+      Number(row.rejectionQuantity || 0).toLocaleString()
+    ),
+    textposition: "outside",
+    cliponaxis: false,
     hovertemplate:
-      "Part: %{y}<br>" +
+      "<b>%{y}</b><br>" +
       "Rejections: %{x:,}<extra></extra>",
   };
 
@@ -298,11 +302,14 @@ function Overview({ data }) {
               xaxis: {
                 title: "Month",
                 type: "category",
+                showgrid: false,
+                zeroline: false,
               },
 
               yaxis: {
-                title:
-                  "Rejection Quantity",
+                title: "Rejection Quantity",
+                showgrid: false,
+                zeroline: false,
               },
 
               height: 330,
@@ -382,22 +389,24 @@ function Overview({ data }) {
               },
 
               xaxis: {
-                title:
-                  "Rejection Quantity",
+                title: "Rejection Quantity",
+                rangemode: "tozero",
+                automargin: true,
               },
 
               yaxis: {
                 title: "Part No.",
                 automargin: true,
+                autorange: "reversed",
               },
 
-              height: 330,
+              height: Math.max(390, topParts.length * 31 + 105),
 
               margin: {
-                l: 100,
-                r: 25,
+                l: 125,
+                r: 65,
                 t: 55,
-                b: 50,
+                b: 55,
               },
             }}
           />
