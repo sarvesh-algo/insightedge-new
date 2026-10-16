@@ -12,6 +12,8 @@ from app.services.customer_complaints import (
 )
 from app.services.dataset_manager import (
     load_combined_dataset,
+    get_dataset_status,
+    _is_valid_sheet,
 )
 
 import math
@@ -134,8 +136,11 @@ def save_location_master(source: str, location: str, upload_file):
         if frame is None or frame.empty:
             return False
 
-        if source == "customer_complaints":
-            return is_customer_complaint_sheet(frame)
+        frame = frame.copy()
+        frame.columns = [
+            str(column).strip()
+            for column in frame.columns
+        ]
 
         return _is_valid_sheet(frame, source)
 
